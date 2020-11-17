@@ -1011,62 +1011,15 @@ func fixupStackTypeMeta(stack *zv1.Stack) {
 	stack.Kind = core.KindStack
 }
 
-<<<<<<< HEAD
 func resourceReady(timestamp string, ttl time.Duration) (bool, error) {
 	resourceLastUpdated, err := time.Parse(time.RFC3339, timestamp)
-=======
-func routeGroupReady(rg *rgv1.RouteGroup, ttl time.Duration) bool {
-	var rgLastUpdated time.Time
-	timestamp, ok := rg.Annotations[core.StacksetControllerUpdateTimestampAnnotationkey]
-	// The only scenario version we could think of for this is
-	//  if the RouteGroup was created by an older version of StackSet Controller
-	//  in that case, just wait until the RouteGroup has the annotation
-	// TODO: mayb add an e2e for this to verify
-	if !ok {
-		// TODO: Log this
-		return false
-	}
-
-	rgLastUpdated, err := time.Parse(time.RFC3339, timestamp)
-	if err != nil {
-		// wait until there's a valid timestamp on the annotation
-		// TODO: Log this
-		return false
-	}
-
-	if !rgLastUpdated.IsZero() && time.Since(rgLastUpdated) > ttl {
-		return true
-	}
-
-	return false
-}
-
-func ingressReady(ing *networking.Ingress, ttl time.Duration) bool {
-	var ingLastUpdated time.Time
-	timestamp, ok := ing.Annotations[core.StacksetControllerUpdateTimestampAnnotationkey]
-	// The only scenario version we could think of for this is
-	//  if the Ingress was created by an older version of StackSet Controller
-	//  in that case, just wait until the Ingress has the annotation
-	// TODO: maybe add an e2e for this to verify
-	if !ok {
-		// TODO: Log this
-		return false
-	}
-
-	ingLastUpdated, err := time.Parse(time.RFC3339, timestamp)
->>>>>>> af2ef811d54a70bdea2f1fb51e4d10df30f3c709
 	if err != nil {
 		// wait until there's a valid timestamp on the annotation
 		return false, err
 	}
 
-<<<<<<< HEAD
 	if !resourceLastUpdated.IsZero() && time.Since(resourceLastUpdated) > ttl {
 		return true, nil
-=======
-	if !ingLastUpdated.IsZero() && time.Since(ingLastUpdated) > ttl {
-		return true
->>>>>>> af2ef811d54a70bdea2f1fb51e4d10df30f3c709
 	}
 
 	return false, nil
