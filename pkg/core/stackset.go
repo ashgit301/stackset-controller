@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
-	"time"
 
 	rgv1 "github.com/szuecs/routegroup-client/apis/zalando.org/v1"
 	zv1 "github.com/zalando-incubator/stackset-controller/pkg/apis/zalando.org/v1"
@@ -14,11 +13,11 @@ import (
 )
 
 const (
-	StacksetHeritageLabelKey = "stackset"
-	StackVersionLabelKey     = "stack-version"
-
-	ingressTrafficAuthoritativeAnnotation          = "zalando.org/traffic-authoritative"
+	StacksetHeritageLabelKey                       = "stackset"
+	StackVersionLabelKey                           = "stack-version"
 	StacksetControllerUpdateTimestampAnnotationkey = "stackset-controller.zalando.org/updated-timestamp"
+
+	ingressTrafficAuthoritativeAnnotation = "zalando.org/traffic-authoritative"
 )
 
 var (
@@ -26,6 +25,11 @@ var (
 	errNoStacks            = errors.New("no stacks to assign traffic to")
 	errStackServiceBackend = errors.New("additionalBackends must not reference a Stack Service")
 )
+
+// Clocker is the func type that represents how implementors can return
+// the current timestamp. It's used to indicate the resources' update
+// time.
+type Clocker = func() string
 
 func currentStackVersion(stackset *zv1.StackSet) string {
 	version := stackset.Spec.StackTemplate.Spec.Version
@@ -137,7 +141,7 @@ func (ssc *StackSetContainer) MarkExpiredStacks() {
 	}
 }
 
-func (ssc *StackSetContainer) GenerateRouteGroup() (*rgv1.RouteGroup, error) {
+func (ssc *StackSetContainer) GenerateRouteGroup(clock Clocker) (*rgv1.RouteGroup, error) {
 	stackset := ssc.StackSet
 	if stackset.Spec.RouteGroup == nil {
 		return nil, nil
@@ -163,7 +167,7 @@ func (ssc *StackSetContainer) GenerateRouteGroup() (*rgv1.RouteGroup, error) {
 			},
 			Annotations: map[string]string{
 				// using the same time.Format as the metav1.Time
-				StacksetControllerUpdateTimestampAnnotationkey: time.Now().Format(time.RFC3339),
+				StacksetControllerUpdateTimestampAnnotationkey: clock(),
 			},
 		},
 		Spec: rgv1.RouteGroupSpec{
@@ -214,7 +218,7 @@ func (ssc *StackSetContainer) GenerateRouteGroup() (*rgv1.RouteGroup, error) {
 	return result, nil
 }
 
-func (ssc *StackSetContainer) GenerateIngress() (*networking.Ingress, error) {
+func (ssc *StackSetContainer) GenerateIngress(clock Clocker) (*networking.Ingress, error) {
 	stackset := ssc.StackSet
 	if stackset.Spec.Ingress == nil {
 		return nil, nil
@@ -226,12 +230,8 @@ func (ssc *StackSetContainer) GenerateIngress() (*networking.Ingress, error) {
 	)
 
 	annotations := map[string]string{
-		ingressTrafficAuthoritativeAnnotation: "false",
-		// TODO: maybe create one instance of a "timer" to hold the
-		//  logic on how to get the current timestamp. It's already
-		//  used in two places and can't be easily tested.
-		// using the same time.Format as the metav1.Time
-		StacksetControllerUpdateTimestampAnnotationkey: time.Now().Format(time.RFC3339),
+		ingressTrafficAuthoritativeAnnotation:          "false",
+		StacksetControllerUpdateTimestampAnnotationkey: clock(),
 	}
 
 	result := &networking.Ingress{

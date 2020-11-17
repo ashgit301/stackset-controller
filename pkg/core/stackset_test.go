@@ -18,6 +18,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+const (
+	timeNow = "2002-06-30T20:00:00Z"
+)
+
 func TestExpiredStacks(t *testing.T) {
 	now := time.Now()
 
@@ -928,14 +932,14 @@ func TestStackSetGenerateIngress(t *testing.T) {
 		},
 		backendWeightsAnnotationKey: traffic.DefaultBackendWeightsAnnotationKey,
 	}
-	ingress, err := c.GenerateIngress()
+	ingress, err := c.GenerateIngress(func() string { return timeNow })
 	require.NoError(t, err)
 
 	annotations := map[string]string{
 		"ingress":                                      "annotation",
 		"zalando.org/backend-weights":                  `{"foo-v1":0.25,"foo-v2":0.125,"foo-v3":0.625}`,
 		"zalando.org/traffic-authoritative":            "false",
-		StacksetControllerUpdateTimestampAnnotationkey: time.Now().String(),
+		StacksetControllerUpdateTimestampAnnotationkey: timeNow,
 	}
 
 	expected := &networking.Ingress{
@@ -1024,13 +1028,7 @@ func TestStackSetGenerateIngress(t *testing.T) {
 	require.Equal(t, expected.Name, ingress.Name)
 	require.Equal(t, expected.Namespace, ingress.Namespace)
 	require.Equal(t, expected.Labels, ingress.Labels)
-	// TODO: Create a clock instance and mock it here. Here it becomes
-	//  even more critical, as the annotations are important.
-	// Annotation values contain timestamps so only checking the keys
-	for _, k := range keys(expected.Annotations) {
-		require.Contains(t, ingress.Annotations, k)
-	}
-	require.Equal(t, expected.Spec, ingress.Spec)
+	require.Equal(t, expected, ingress)
 }
 
 func TestStackSetGenerateIngressNone(t *testing.T) {
@@ -1038,7 +1036,7 @@ func TestStackSetGenerateIngressNone(t *testing.T) {
 		StackSet:                    &zv1.StackSet{},
 		backendWeightsAnnotationKey: traffic.DefaultBackendWeightsAnnotationKey,
 	}
-	ingress, err := c.GenerateIngress()
+	ingress, err := c.GenerateIngress(func() string { return timeNow })
 	require.NoError(t, err)
 	require.Nil(t, ingress)
 }
@@ -1091,7 +1089,7 @@ func TestStackSetGenerateRouteGroup(t *testing.T) {
 			"v4": testStack("foo-v4").traffic(0, 0).stack(),
 		},
 	}
-	routegroup, err := c.GenerateRouteGroup()
+	routegroup, err := c.GenerateRouteGroup(func() string { return timeNow })
 	require.NoError(t, err)
 
 	expected := &rgv1.RouteGroup{
@@ -1111,7 +1109,7 @@ func TestStackSetGenerateRouteGroup(t *testing.T) {
 				},
 			},
 			Annotations: map[string]string{
-				StacksetControllerUpdateTimestampAnnotationkey: time.Now().String(),
+				StacksetControllerUpdateTimestampAnnotationkey: timeNow,
 			},
 		},
 		Spec: rgv1.RouteGroupSpec{
@@ -1179,20 +1177,5 @@ func TestStackSetGenerateRouteGroup(t *testing.T) {
 	require.Equal(t, expected.Name, routegroup.Name)
 	require.Equal(t, expected.Namespace, routegroup.Namespace)
 	require.Equal(t, expected.Labels, routegroup.Labels)
-	// TODO: Create a clock instance and mock it here
-	// Annotation values contain timestamps so only checking the keys
-	for _, k := range keys(expected.Annotations) {
-		require.Contains(t, routegroup.Annotations, k)
-	}
-	require.Equal(t, expected.Spec, routegroup.Spec)
-
-}
-
-func keys(kv map[string]string) []string {
-	ks := make([]string, 0, len(kv))
-	for k := range kv {
-		ks = append(ks, k)
-	}
-
-	return ks
+	require.Equal(t, expected, routegroup)
 }

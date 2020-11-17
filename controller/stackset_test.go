@@ -20,6 +20,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
+var (
+	timeNow = time.Now().Format(time.RFC3339)
+	// ttl for the test environment is time.Minute, here
+	// timeOldEnough is set to twice this value.
+	timeOldEnough = time.Now().Add(-2 * time.Minute).Format(time.RFC3339)
+)
+
 func TestGetOwnerUID(t *testing.T) {
 	objectMeta := metav1.ObjectMeta{
 		OwnerReferences: []metav1.OwnerReference{
@@ -602,7 +609,6 @@ func TestReconcileStackSetIngress(t *testing.T) {
 			},
 		},
 		{
-			// TODO: take into account RouteGroup UpdatedTimestamp
 			name: "ingress is not removed if RouteGroup is too young",
 			existing: &networking.Ingress{
 				ObjectMeta: stacksetOwned(testStackSet),
@@ -617,7 +623,7 @@ func TestReconcileStackSetIngress(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: testStackSet.Name,
 					Annotations: map[string]string{
-						core.StacksetControllerUpdateTimestampAnnotationkey: time.Now().Format(time.RFC3339),
+						core.StacksetControllerUpdateTimestampAnnotationkey: timeNow,
 					},
 				},
 			},
@@ -713,9 +719,8 @@ func TestReconcileStackSetIngress(t *testing.T) {
 			routegroup: &rgv1.RouteGroup{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: testStackSet.Name,
-					// TODO: Stop using this magic number (-2)
 					Annotations: map[string]string{
-						core.StacksetControllerUpdateTimestampAnnotationkey: time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339),
+						core.StacksetControllerUpdateTimestampAnnotationkey: timeOldEnough,
 					},
 				},
 			},
@@ -739,7 +744,7 @@ func TestReconcileStackSetIngress(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			err = env.controller.ReconcileStackSetIngress(context.Background(), &stackset, tc.existing, tc.routegroup, func() (*networking.Ingress, error) {
+			err = env.controller.ReconcileStackSetIngress(context.Background(), &stackset, tc.existing, tc.routegroup, func(core.Clocker) (*networking.Ingress, error) {
 				return tc.updated, nil
 			})
 			require.NoError(t, err)
@@ -860,7 +865,6 @@ func TestReconcileStackSetRouteGroup(t *testing.T) {
 			},
 		},
 		{
-			// TODO: Take into account Ingress UpdatedTimestamp
 			name: "routegroup is not removed if Ingress is too young",
 			existing: &rgv1.RouteGroup{
 				ObjectMeta: stacksetOwned(testStackSet),
@@ -873,7 +877,7 @@ func TestReconcileStackSetRouteGroup(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{
 					Name: testStackSet.Name,
 					Annotations: map[string]string{
-						core.StacksetControllerUpdateTimestampAnnotationkey: time.Now().Format(time.RFC3339),
+						core.StacksetControllerUpdateTimestampAnnotationkey: timeNow,
 					},
 				},
 			},
@@ -942,7 +946,6 @@ func TestReconcileStackSetRouteGroup(t *testing.T) {
 			},
 		},
 		{
-			// TODO: Take into account Ingress UpdatedTimestamp
 			name: "routegroup is removed if Ingress is old enough",
 			existing: &rgv1.RouteGroup{
 				ObjectMeta: stacksetOwned(testStackSet),
@@ -954,9 +957,8 @@ func TestReconcileStackSetRouteGroup(t *testing.T) {
 			ingress: &networking.Ingress{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: testStackSet.Name,
-					// TODO: Stop using this magic number (-2)
 					Annotations: map[string]string{
-						core.StacksetControllerUpdateTimestampAnnotationkey: time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339),
+						core.StacksetControllerUpdateTimestampAnnotationkey: timeOldEnough,
 					},
 				},
 			},
@@ -980,7 +982,7 @@ func TestReconcileStackSetRouteGroup(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			err = env.controller.ReconcileStackSetRouteGroup(context.Background(), &stackset, tc.existing, tc.ingress, func() (*rgv1.RouteGroup, error) {
+			err = env.controller.ReconcileStackSetRouteGroup(context.Background(), &stackset, tc.existing, tc.ingress, func(core.Clocker) (*rgv1.RouteGroup, error) {
 				return tc.updated, nil
 			})
 			require.NoError(t, err)

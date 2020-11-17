@@ -63,6 +63,7 @@ type StackSetController struct {
 	HealthReporter              healthcheck.Handler
 	routeGroupSupportEnabled    bool
 	ingressSourceSwitchTTL      time.Duration
+	clock                       core.Clocker
 	sync.Mutex
 }
 
@@ -78,6 +79,13 @@ type eventedError struct {
 
 func (ee *eventedError) Error() string {
 	return ee.err.Error()
+}
+
+// now is the main implementation of core.Clocker. It returns the
+// current timestamp using the std time lib and parsing it with the
+// RFC3339 format.
+func now() string {
+	return time.Now().Format(time.RFC3339)
 }
 
 // NewStackSetController initializes a new StackSetController.
@@ -101,6 +109,7 @@ func NewStackSetController(client clientset.Interface, controllerID, backendWeig
 		HealthReporter:              healthcheck.NewHandler(),
 		routeGroupSupportEnabled:    routeGroupSupportEnabled,
 		ingressSourceSwitchTTL:      ingressSourceSwitchTTL,
+		clock:                       now,
 	}, nil
 }
 
@@ -651,8 +660,8 @@ func (c *StackSetController) CleanupOldStacks(ctx context.Context, ssc *core.Sta
 	return nil
 }
 
-func (c *StackSetController) ReconcileStackSetIngress(ctx context.Context, stackset *zv1.StackSet, existing *networking.Ingress, routegroup *rgv1.RouteGroup, generateUpdated func() (*networking.Ingress, error)) error {
-	ingress, err := generateUpdated()
+func (c *StackSetController) ReconcileStackSetIngress(ctx context.Context, stackset *zv1.StackSet, existing *networking.Ingress, routegroup *rgv1.RouteGroup, generateUpdated func(core.Clocker) (*networking.Ingress, error)) error {
+	ingress, err := generateUpdated(c.clock)
 	if err != nil {
 		return err
 	}
@@ -665,7 +674,21 @@ func (c *StackSetController) ReconcileStackSetIngress(ctx context.Context, stack
 				if routegroup == nil {
 					c.logger.Infof("Not deleting Ingress %s yet, RouteGroup missing", existing.Name)
 					return nil
-				} else if !routeGroupReady(routegroup, c.ingressSourceSwitchTTL) {
+				}
+				timestamp, ok := routegroup.Annotations[core.StacksetControllerUpdateTimestampAnnotationkey]
+				// The only scenario version we could think of for this is
+				//  if the RouteGroup was created by an older version of StackSet Controller
+				//  in that case, just wait until the RouteGroup has the annotation
+				// TODO: maybe add an e2e for this to verify
+				if !ok {
+					c.logger.Infof("Not deleting Ingress %s yet, RouteGroup %s does not have the %s annotation yet", existing.Name, routegroup.Name, core.StacksetControllerUpdateTimestampAnnotationkey)
+					return nil
+				}
+
+				if ready, err := resourceReady(timestamp, c.ingressSourceSwitchTTL); err != nil {
+					c.logger.Infof("Not deleting Ingress %s yet, RouteGroup %s does not have a valid %s annotation yet", existing.Name, routegroup.Name, core.StacksetControllerUpdateTimestampAnnotationkey)
+					return nil
+				} else if !ready {
 					c.logger.Infof("Not deleting Ingress %s yet, RouteGroup %s created less than %s ago", existing.Name, routegroup.Name, c.ingressSourceSwitchTTL)
 					return nil
 				}
@@ -722,9 +745,8 @@ func (c *StackSetController) ReconcileStackSetIngress(ctx context.Context, stack
 	return nil
 }
 
-// TODO: update to only check Ingress UpdateTimestamp
-func (c *StackSetController) ReconcileStackSetRouteGroup(ctx context.Context, stackset *zv1.StackSet, existing *rgv1.RouteGroup, ingress *networking.Ingress, generateUpdated func() (*rgv1.RouteGroup, error)) error {
-	rg, err := generateUpdated()
+func (c *StackSetController) ReconcileStackSetRouteGroup(ctx context.Context, stackset *zv1.StackSet, existing *rgv1.RouteGroup, ingress *networking.Ingress, generateUpdated func(core.Clocker) (*rgv1.RouteGroup, error)) error {
+	rg, err := generateUpdated(c.clock)
 	if err != nil {
 		return err
 	}
@@ -737,7 +759,21 @@ func (c *StackSetController) ReconcileStackSetRouteGroup(ctx context.Context, st
 				if ingress == nil {
 					c.logger.Infof("Not deleting RouteGroup %s yet, Ingress missing", existing.Name)
 					return nil
-				} else if !ingressReady(ingress, c.ingressSourceSwitchTTL) {
+				}
+				timestamp, ok := ingress.Annotations[core.StacksetControllerUpdateTimestampAnnotationkey]
+				// The only scenario version we could think of for this is
+				//  if the RouteGroup was created by an older version of StackSet Controller
+				//  in that case, just wait until the RouteGroup has the annotation
+				// TODO: maybe add an e2e for this to verify
+				if !ok {
+					c.logger.Infof("Not deleting RouteGroup %s yet, Ingress %s does not have the %s annotation yet", existing.Name, ingress.Name, core.StacksetControllerUpdateTimestampAnnotationkey)
+					return nil
+				}
+
+				if ready, err := resourceReady(timestamp, c.ingressSourceSwitchTTL); err != nil {
+					c.logger.Infof("Not deleting RouteGroup %s yet, Ingress %s does not have a valid %s annotation yet", existing.Name, ingress.Name, core.StacksetControllerUpdateTimestampAnnotationkey)
+					return nil
+				} else if !ready {
 					c.logger.Infof("Not deleting RouteGroup %s yet, Ingress %s created less than %s ago", existing.Name, ingress.Name, c.ingressSourceSwitchTTL)
 					return nil
 				}
@@ -975,54 +1011,16 @@ func fixupStackTypeMeta(stack *zv1.Stack) {
 	stack.Kind = core.KindStack
 }
 
-func routeGroupReady(rg *rgv1.RouteGroup, ttl time.Duration) bool {
-	var rgLastUpdated time.Time
-	timestamp, ok := rg.Annotations[core.StacksetControllerUpdateTimestampAnnotationkey]
-	// The only scenario version we could think of for this is
-	//  if the RouteGroup was created by an older version of StackSet Controller
-	//  in that case, just wait until the RouteGroup has the annotation
-	// TODO: mayb add an e2e for this to verify
-	if !ok {
-		// TODO: Log this
-		return false
-	}
-
-	rgLastUpdated, err := time.Parse(time.RFC3339, timestamp)
+func resourceReady(timestamp string, ttl time.Duration) (bool, error) {
+	resourceLastUpdated, err := time.Parse(time.RFC3339, timestamp)
 	if err != nil {
 		// wait until there's a valid timestamp on the annotation
-		// TODO: Log this
-		return false
+		return false, err
 	}
 
-	if !rgLastUpdated.IsZero() && time.Since(rgLastUpdated) > ttl {
-		return true
+	if !resourceLastUpdated.IsZero() && time.Since(resourceLastUpdated) > ttl {
+		return true, nil
 	}
 
-	return false
-}
-
-func ingressReady(rg *rgv1.RouteGroup, ttl time.Duration) bool {
-	var rgLastUpdated time.Time
-	timestamp, ok := rg.Annotations[core.StacksetControllerUpdateTimestampAnnotationkey]
-	// The only scenario version we could think of for this is
-	//  if the RouteGroup was created by an older version of StackSet Controller
-	//  in that case, just wait until the RouteGroup has the annotation
-	// TODO: mayb add an e2e for this to verify
-	if !ok {
-		// TODO: Log this
-		return false
-	}
-
-	rgLastUpdated, err := time.Parse(time.RFC3339, timestamp)
-	if err != nil {
-		// wait until there's a valid timestamp on the annotation
-		// TODO: Log this
-		return false
-	}
-
-	if !rgLastUpdated.IsZero() && time.Since(rgLastUpdated) > ttl {
-		return true
-	}
-
-	return false
+	return false, nil
 }
